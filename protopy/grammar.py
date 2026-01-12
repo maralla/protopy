@@ -1,12 +1,16 @@
 import itertools
 from dataclasses import dataclass
-from typing import Callable, Union, get_type_hints, get_origin, get_args
+from typing import TYPE_CHECKING, Union, get_type_hints, get_origin, get_args
 
 from . import ast
 from .symbol import TerminalSymbol, NonTerminalSymbol, Symbol, \
     NonTerminalType, Terminal, NonTerminal
 from .errors import ParseError
 from .spans import Position, Span
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,8 +62,7 @@ CONST_AGGREGATE = TerminalSymbol("aggregate")
 
 
 def eps() -> Epsilon:
-    """
-    Marker for epsilon (empty) productions.
+    """Marker for epsilon (empty) productions.
 
     Usage in type annotations:
         # Direct epsilon production:
@@ -73,7 +76,7 @@ def eps() -> Epsilon:
         #   Nt_Opt -> COMMA  (receives (token,), len=1, returns True)
         #   Nt_Opt -> ε      (receives (), len=0, returns False)
     """
-    return tuple()
+    return ()
 
 
 # Literal tokens
@@ -257,19 +260,19 @@ MAP_KEY_TYPES = frozenset([
 class GrammarExtractor:
     """Extracts grammar productions from annotated methods."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.productions: list[Production] = []
 
     def _extract_from_values_type(
         self,
-        values_type,
+        values_type: object,
         head: NonTerminalSymbol,
-        func: Callable
+        func: Callable,
     ) -> list[Production]:
         """Recursively extract productions from a values type annotation."""
         # Handle epsilon productions: values: eps
         if values_type is eps:
-            return [Production(head=head, body=tuple(), action=func)]
+            return [Production(head=head, body=(), action=func)]
 
         origin_type = get_origin(values_type)
 
@@ -278,7 +281,7 @@ class GrammarExtractor:
             productions = []
             for alt in get_args(values_type):
                 productions.extend(
-                    self._extract_from_values_type(alt, head, func)
+                    self._extract_from_values_type(alt, head, func),
                 )
             return productions
 
@@ -290,7 +293,7 @@ class GrammarExtractor:
 
         # Empty tuple means epsilon
         if not body_types:
-            return [Production(head=head, body=tuple(), action=func)]
+            return [Production(head=head, body=(), action=func)]
 
         # Convert body_types to list of alternatives
         # tuple[NT, T | NT | NT, T]
@@ -316,8 +319,7 @@ class GrammarExtractor:
         ]
 
     def extract_from_function(self, func: Callable) -> list[Production]:
-        """
-        Extract production rule(s) from a function's type annotations.
+        """Extract production rule(s) from a function's type annotations.
 
         Can return multiple productions if values contains a union type.
         Returns empty list if the function doesn't have the right annotations.
@@ -367,17 +369,16 @@ def join_span(*values: Token | ast.Node) -> Span:
     return Span(
         file=values[0].span.file,
         start=values[0].span.start,
-        end=values[-1].span.end
+        end=values[-1].span.end,
     )
 
 
 # ============================================================================
 # Grammar builder with semantic actions
 # ============================================================================
-
+# ruff: noqa: N805, E501
 class GrammarBuilder:
-    """
-    Proto3 grammar definition using type-annotation-driven productions.
+    """Proto3 grammar definition using type-annotation-driven productions.
 
     Each act_* method defines a production rule through its type annotations:
     - Parameter type: tuple of RHS symbols (Terminal/NonTerminal instances)
@@ -400,14 +401,15 @@ class GrammarBuilder:
         if isinstance(value, Token):
             # Literal constant (int, float, string, bool)
             return value.to_constant()
-        elif isinstance(value, ast.QualifiedName):
+
+        if isinstance(value, ast.QualifiedName):
             # Identifier constant
             return ast.Constant(
                 span=value.span, kind=CONST_IDENT, value=value
             )
-        else:
-            # Aggregate constant (already an ast.Constant)
-            return value
+
+        # Aggregate constant (already an ast.Constant)
+        return value
 
     # -----------------------------------------------------------------------
     # Semantic actions: Qualified names
@@ -422,24 +424,22 @@ class GrammarBuilder:
 
         return [values[1]] + values[2]
 
-    def act_qualified_name_absolute(
-        values: tuple[DOT, Ident, NameTail]
-    ) -> QualifiedName[ast.QualifiedName]:
+    def act_qualified_name_absolute(values: tuple[DOT, Ident, NameTail]) -> QualifiedName[ast.QualifiedName]:
         ident_tok: Token = values[1]
         tail: list[Token] = values[2]
         last = tail[-1] if tail else ident_tok
+
         return ast.QualifiedName(
             span=join_span(values[0], last),
             absolute=True,
             parts=tuple([ident_tok.lexeme] + [tok.lexeme for tok in tail]),
         )
 
-    def act_qualified_name_relative(
-        values: tuple[Ident, NameTail]
-    ) -> QualifiedName[ast.QualifiedName]:
+    def act_qualified_name_relative(values: tuple[Ident, NameTail]) -> QualifiedName[ast.QualifiedName]:
         ident_tok: Token = values[0]
         tail: list[Token] = values[1]
         last = tail[-1] if tail else ident_tok
+
         return ast.QualifiedName(
             span=join_span(ident_tok, last),
             absolute=False,
@@ -453,34 +453,25 @@ class GrammarBuilder:
     def act_opt_comma(values: tuple[COMMA] | Epsilon) -> OptComma[bool]:
         return len(values) > 0
 
-    def act_aggregate_field(
-        values: tuple[Ident, COLON, Const, OptComma]
-    ) -> AggField[tuple]:
+    def act_aggregate_field(values: tuple[Ident, COLON, Const, OptComma]) -> AggField[tuple]:
         tok: Token = values[0]
         const: ast.Constant = values[2]
         return (tok.lexeme, const)
 
-    def act_aggregate_tail(
-        values: tuple[AggField, AggFieldsTail] | Epsilon
-    ) -> AggFieldsTail[list]:
+    def act_aggregate_tail(values: tuple[AggField, AggFieldsTail] | Epsilon) -> AggFieldsTail[list]:
         if len(values) == 0:
             return []
         return [values[0]] + values[1]
 
-    def act_aggregate_fields(
-        values: tuple[AggField, AggFieldsTail]
-    ) -> AggFields[list]:
+    def act_aggregate_fields(values: tuple[AggField, AggFieldsTail]) -> AggFields[list]:
         return [values[0]] + values[1]
 
-    def act_agg_fields_opt(
-        values: tuple[AggFields] | Epsilon
-    ) -> AggFieldsOpt[list]:
+    def act_agg_fields_opt(values: tuple[AggFields] | Epsilon) -> AggFieldsOpt[list]:
         return values[0] if len(values) > 0 else []
 
-    def act_aggregate(
-        values: tuple[LBRACE, AggFieldsOpt, RBRACE]
-    ) -> Aggregate[ast.Constant]:
+    def act_aggregate(values: tuple[LBRACE, AggFieldsOpt, RBRACE]) -> Aggregate[ast.Constant]:
         fields: list = values[1]
+
         return ast.Constant(
             span=join_span(values[0], values[2]),
             kind=CONST_AGGREGATE, value=tuple(fields)
@@ -490,26 +481,20 @@ class GrammarBuilder:
     # Semantic actions: Options
     # -----------------------------------------------------------------------
 
-    def act_option_suffix(
-        values: tuple[DOT, Ident, OptionSuffix] | Epsilon
-    ) -> OptionSuffix[list]:
+    def act_option_suffix(values: tuple[DOT, Ident, OptionSuffix] | Epsilon) -> OptionSuffix[list]:
         if len(values) == 0:
             return []
 
         tok: Token = values[1]
         return [tok] + values[2]
 
-    def act_option_name_plain(
-        values: tuple[QualifiedName]
-    ) -> OptionName[ast.OptionName]:
+    def act_option_name_plain(values: tuple[QualifiedName]) -> OptionName[ast.OptionName]:
         qn: ast.QualifiedName = values[0]
         return ast.OptionName(
-            span=qn.span, custom=False, base=qn, suffix=tuple()
+            span=qn.span, custom=False, base=qn, suffix=()
         )
 
-    def act_option_name_custom(
-        values: tuple[LPAREN, QualifiedName, RPAREN, OptionSuffix]
-    ) -> OptionName[ast.OptionName]:
+    def act_option_name_custom(values: tuple[LPAREN, QualifiedName, RPAREN, OptionSuffix]) -> OptionName[ast.OptionName]:
         qn: ast.QualifiedName = values[1]
         suffix: list = values[3]
         last = suffix[-1] if suffix else values[2]
@@ -520,9 +505,7 @@ class GrammarBuilder:
             suffix=tuple(tok.lexeme for tok in suffix),
         )
 
-    def act_option(
-        values: tuple[OptionName, EQ, Const]
-    ) -> Option[ast.Option]:
+    def act_option(values: tuple[OptionName, EQ, Const]) -> Option[ast.Option]:
         name: ast.OptionName = values[0]
         const: ast.Constant = values[2]
         return ast.Option(
@@ -530,9 +513,7 @@ class GrammarBuilder:
             name=name, value=const
         )
 
-    def act_option_statement(
-        values: tuple[OPTION, Option, SEMI]
-    ) -> OptionStmt[ast.OptionStmt]:
+    def act_option_statement(values: tuple[OPTION, Option, SEMI]) -> OptionStmt[ast.OptionStmt]:
         opt: ast.Option = values[1]
         return ast.OptionStmt(
             span=join_span(values[0], values[2]), option=opt
@@ -542,9 +523,7 @@ class GrammarBuilder:
     # Semantic actions: Top-level statements
     # -----------------------------------------------------------------------
 
-    def act_syntax_statement(
-        values: tuple[SYNTAX, EQ, STRING, SEMI]
-    ) -> SyntaxStmt[ast.Syntax]:
+    def act_syntax_statement(values: tuple[SYNTAX, EQ, STRING, SEMI]) -> SyntaxStmt[ast.Syntax]:
         literal = values[2].lexeme
         if literal != "proto3":
             raise ParseError(
@@ -552,21 +531,18 @@ class GrammarBuilder:
                 message="only proto3 syntax is supported",
                 hint='use: syntax = "proto3";'
             )
+
         return ast.Syntax(
             span=join_span(values[0], values[3]), value=literal
         )
 
-    def act_import_modifier(
-        values: tuple[WEAK] | tuple[PUBLIC] | Epsilon
-    ) -> ImportModOpt[str | None]:
+    def act_import_modifier(values: tuple[WEAK] | tuple[PUBLIC] | Epsilon) -> ImportModOpt[str | None]:
         if len(values) == 0:
             return None
         tok: Token = values[0]
         return tok.lexeme
 
-    def act_import_statement(
-        values: tuple[IMPORT, ImportModOpt, STRING, SEMI]
-    ) -> ImportStmt[ast.Import]:
+    def act_import_statement(values: tuple[IMPORT, ImportModOpt, STRING, SEMI]) -> ImportStmt[ast.Import]:
         modifier: str | None = values[1]
         path_tok: Token = values[2]
         return ast.Import(
@@ -574,9 +550,7 @@ class GrammarBuilder:
             path=path_tok.lexeme, modifier=modifier
         )
 
-    def act_package_statement(
-        values: tuple[PACKAGE, QualifiedName, SEMI]
-    ) -> PackageStmt[ast.Package]:
+    def act_package_statement(values: tuple[PACKAGE, QualifiedName, SEMI]) -> PackageStmt[ast.Package]:
         qn: ast.QualifiedName = values[1]
         return ast.Package(
             span=join_span(values[0], values[2]), name=qn
@@ -590,23 +564,17 @@ class GrammarBuilder:
         opt: ast.Option = values[0]
         return ast.FieldOption(span=opt.span, option=opt)
 
-    def act_field_option_tail(
-        values: tuple[COMMA, FieldOption, FieldOptionListTail] | Epsilon
-    ) -> FieldOptionListTail[list]:
+    def act_field_option_tail(values: tuple[COMMA, FieldOption, FieldOptionListTail] | Epsilon) -> FieldOptionListTail[list]:
         if len(values) == 0:
             return []
         return [values[1]] + values[2]
 
-    def act_field_option_list(
-        values: tuple[FieldOption, FieldOptionListTail]
-    ) -> FieldOptionList[list]:
+    def act_field_option_list(values: tuple[FieldOption, FieldOptionListTail]) -> FieldOptionList[list]:
         return [values[0]] + values[1]
 
-    def act_field_options(
-        values: tuple[LBRACKET, FieldOptionList, RBRACKET] | Epsilon
-    ) -> FieldOptions[tuple]:
+    def act_field_options(values: tuple[LBRACKET, FieldOptionList, RBRACKET] | Epsilon) -> FieldOptions[tuple]:
         if len(values) == 0:
-            return tuple()
+            return ()
         return tuple(values[1])
 
     # -----------------------------------------------------------------------
@@ -619,9 +587,7 @@ class GrammarBuilder:
     def act_map_key(values: tuple[Ident]) -> MapKeyType[Token]:
         return values[0]
 
-    def act_map_type(
-        values: tuple[MAP, LANGLE, MapKeyType, COMMA, MapValueType, RANGLE]
-    ) -> MapType[tuple]:
+    def act_map_type(values: tuple[MAP, LANGLE, MapKeyType, COMMA, MapValueType, RANGLE]) -> MapType[tuple]:
         key_tok: Token = values[2]
         value_qn: ast.QualifiedName = values[4]
         return (join_span(values[0], values[5]), key_tok, value_qn)
@@ -794,24 +760,18 @@ class GrammarBuilder:
             options=tuple(options),
         )
 
-    def act_oneof_elem(
-        values: tuple[OneofField | SEMI]
-    ) -> OneofElem[ast.Field | None]:
+    def act_oneof_elem(values: tuple[OneofField | SEMI]) -> OneofElem[ast.Field | None]:
         if isinstance(values[0], Token):  # SEMI token
             return None
         return values[0]
 
-    def act_oneof_body(
-        values: tuple[OneofElem, OneofBody] | Epsilon
-    ) -> OneofBody[list]:
+    def act_oneof_body(values: tuple[OneofElem, OneofBody] | Epsilon) -> OneofBody[list]:
         if len(values) == 0:
             return []
         head = [values[0]] if values[0] is not None else []
         return head + [x for x in values[1] if x is not None]
 
-    def act_oneof(
-        values: tuple[ONEOF, IDENT, LBRACE, OneofBody, RBRACE]
-    ) -> Oneof[ast.Oneof]:
+    def act_oneof(values: tuple[ONEOF, IDENT, LBRACE, OneofBody, RBRACE]) -> Oneof[ast.Oneof]:
         name_token: Token = values[1]
         body: list = values[3]
         return ast.Oneof(
@@ -830,9 +790,7 @@ class GrammarBuilder:
             span=join_span(tok), start=int(tok.lexeme)
         )
 
-    def act_reserved_range(
-        values: tuple[INT, TO, INT | MAX]
-    ) -> ReservedRange[ast.ReservedRange]:
+    def act_reserved_range(values: tuple[INT, TO, INT | MAX]) -> ReservedRange[ast.ReservedRange]:
         start_tok: Token = values[0]
         end_tok: Token = values[2]
 
@@ -844,52 +802,38 @@ class GrammarBuilder:
             end=None if is_max else int(end_tok.lexeme)
         )
 
-    def act_reserved_ranges_tail(
-        values: tuple[COMMA, ReservedRange, ReservedRangesTail] | Epsilon
-    ) -> ReservedRangesTail[list]:
+    def act_reserved_ranges_tail(values: tuple[COMMA, ReservedRange, ReservedRangesTail] | Epsilon) -> ReservedRangesTail[list]:
         if len(values) == 0:
             return []
         return [values[1]] + values[2]
 
-    def act_reserved_ranges(
-        values: tuple[ReservedRange, ReservedRangesTail]
-    ) -> ReservedRanges[list]:
+    def act_reserved_ranges(values: tuple[ReservedRange, ReservedRangesTail]) -> ReservedRanges[list]:
         return [values[0]] + values[1]
 
-    def act_reserved_names_tail(
-        values: tuple[COMMA, STRING, ReservedNamesTail] | Epsilon
-    ) -> ReservedNamesTail[list]:
+    def act_reserved_names_tail(values: tuple[COMMA, STRING, ReservedNamesTail] | Epsilon) -> ReservedNamesTail[list]:
         if len(values) == 0:
             return []
         tok: Token = values[1]
         return [tok.lexeme] + values[2]
 
-    def act_reserved_names(
-        values: tuple[STRING, ReservedNamesTail]
-    ) -> ReservedNames[list]:
+    def act_reserved_names(values: tuple[STRING, ReservedNamesTail]) -> ReservedNames[list]:
         tok: Token = values[0]
         return [tok.lexeme] + values[1]
 
-    def act_reserved_spec_ranges(
-        values: tuple[ReservedRanges]
-    ) -> ReservedSpec[tuple]:
+    def act_reserved_spec_ranges(values: tuple[ReservedRanges]) -> ReservedSpec[tuple]:
         return ("ranges", values[0])
 
-    def act_reserved_spec_names(
-        values: tuple[ReservedNames]
-    ) -> ReservedSpec[tuple]:
+    def act_reserved_spec_names(values: tuple[ReservedNames]) -> ReservedSpec[tuple]:
         return ("names", values[0])
 
-    def act_reserved_statement(
-        values: tuple[RESERVED, ReservedSpec, SEMI]
-    ) -> ReservedStmt[ast.Reserved]:
+    def act_reserved_statement(values: tuple[RESERVED, ReservedSpec, SEMI]) -> ReservedStmt[ast.Reserved]:
         spec: tuple = values[1]
         return ast.Reserved(
             span=join_span(values[0], values[2]),
             ranges=tuple(spec[1])
-            if spec[0] == "ranges" else tuple(),
+            if spec[0] == "ranges" else (),
             names=tuple(spec[1])
-            if spec[0] == "names" else tuple(),
+            if spec[0] == "names" else (),
         )
 
     # -----------------------------------------------------------------------
@@ -924,17 +868,13 @@ class GrammarBuilder:
             return None
         return values[0]
 
-    def act_enum_body(
-        values: tuple[EnumElem, EnumBody] | Epsilon
-    ) -> EnumBody[list]:
+    def act_enum_body(values: tuple[EnumElem, EnumBody] | Epsilon) -> EnumBody[list]:
         if len(values) == 0:
             return []
         head = [values[0]] if values[0] is not None else []
         return head + values[1]
 
-    def act_enum(
-        values: tuple[ENUM, Ident, LBRACE, EnumBody, RBRACE]
-    ) -> Enum[ast.Enum]:
+    def act_enum(values: tuple[ENUM, Ident, LBRACE, EnumBody, RBRACE]) -> Enum[ast.Enum]:
         name_token: Token = values[1]
         body: list = values[3]
         return ast.Enum(
@@ -957,17 +897,13 @@ class GrammarBuilder:
             return None
         return values[0]
 
-    def act_message_body(
-        values: tuple[MessageElem, MessageBody] | Epsilon
-    ) -> MessageBody[list]:
+    def act_message_body(values: tuple[MessageElem, MessageBody] | Epsilon) -> MessageBody[list]:
         if len(values) == 0:
             return []
         head = [values[0]] if values[0] is not None else []
         return head + values[1]
 
-    def act_message(
-        values: tuple[MESSAGE, Ident, LBRACE, MessageBody, RBRACE]
-    ) -> Message[ast.Message]:
+    def act_message(values: tuple[MESSAGE, Ident, LBRACE, MessageBody, RBRACE]) -> Message[ast.Message]:
         name_token: Token = values[1]
         body: list = values[3]
         return ast.Message(
@@ -980,15 +916,10 @@ class GrammarBuilder:
     # Semantic actions: RPC and Service
     # -----------------------------------------------------------------------
 
-    def act_stream_yes(values: tuple[STREAM]) -> StreamOpt[bool]:
-        return True
+    def act_is_stream(values: tuple[STREAM] | Epsilon) -> StreamOpt[bool]:
+        return len(values) > 0
 
-    def act_stream_no(values: eps) -> StreamOpt[bool]:
-        return False
-
-    def _make_type_ref(
-        span: Span, qualified: ast.QualifiedName
-    ) -> ast.TypeRef:
+    def _make_type_ref(span: Span, qualified: ast.QualifiedName) -> ast.TypeRef:
         scalar = None
         type_name = qualified
 
@@ -1000,32 +931,25 @@ class GrammarBuilder:
 
         return ast.TypeRef(span=span, type_name=type_name, scalar_type=scalar)
 
-    def act_rpc_type(
-        values: tuple[QualifiedName]
-    ) -> RpcType[ast.QualifiedName]:
+    def act_rpc_type(values: tuple[QualifiedName]) -> RpcType[ast.QualifiedName]:
         return values[0]
 
-    def act_rpc_body_elem(
-        values: tuple[OptionStmt | SEMI]
-    ) -> RpcBodyElem[ast.OptionStmt | None]:
+    def act_rpc_body_elem(values: tuple[OptionStmt | SEMI]) -> RpcBodyElem[ast.OptionStmt | None]:
         if isinstance(values[0], Token):  # SEMI token
             return None
+
         return values[0]
 
-    def act_rpc_body(
-        values: tuple[RpcBodyElem, RpcBody] | Epsilon
-    ) -> RpcBody[list]:
+    def act_rpc_body(values: tuple[RpcBodyElem, RpcBody] | Epsilon) -> RpcBody[list]:
         if len(values) == 0:
             return []
         head = [values[0]] if values[0] is not None else []
         return head + values[1]
 
     def act_rpc_body_optional_semi(values: tuple[SEMI]) -> RpcBodyOpt[tuple]:
-        return tuple()
+        return ()
 
-    def act_rpc_body_optional_block(
-        values: tuple[LBRACE, RpcBody, RBRACE]
-    ) -> RpcBodyOpt[tuple]:
+    def act_rpc_body_optional_block(values: tuple[LBRACE, RpcBody, RBRACE]) -> RpcBodyOpt[tuple]:
         return tuple(values[1])
 
     def act_rpc(
@@ -1050,7 +974,6 @@ class GrammarBuilder:
         request_stream: bool = values[3]
         request_type: ast.QualifiedName = values[4]
         rparen1: Token = values[5]
-        returns_token: Token = values[6]
         lparen2: Token = values[7]
         response_stream: bool = values[8]
         response_type: ast.QualifiedName = values[9]
@@ -1074,24 +997,20 @@ class GrammarBuilder:
             options=tuple([x for x in body_opt if isinstance(x, ast.OptionStmt)]),
         )
 
-    def act_service_elem(
-        values: tuple[Rpc | OptionStmt | SEMI]
-    ) -> ServiceElem[ast.Rpc | ast.OptionStmt | None]:
+    def act_service_elem(values: tuple[Rpc | OptionStmt | SEMI]) -> ServiceElem[ast.Rpc | ast.OptionStmt | None]:
         if isinstance(values[0], Token):  # SEMI token
             return None
+
         return values[0]
 
-    def act_service_body(
-        values: tuple[ServiceElem, ServiceBody] | Epsilon
-    ) -> ServiceBody[list]:
+    def act_service_body(values: tuple[ServiceElem, ServiceBody] | Epsilon) -> ServiceBody[list]:
         if len(values) == 0:
             return []
+
         head = [values[0]] if values[0] is not None else []
         return head + values[1]
 
-    def act_service(
-        values: tuple[SERVICE, Ident, LBRACE, ServiceBody, RBRACE]
-    ) -> Service[ast.Service]:
+    def act_service(values: tuple[SERVICE, Ident, LBRACE, ServiceBody, RBRACE]) -> Service[ast.Service]:
         name_token: Token = values[1]
         body: list = values[3]
         return ast.Service(
@@ -1104,9 +1023,7 @@ class GrammarBuilder:
     # Semantic actions: File (top-level)
     # -----------------------------------------------------------------------
 
-    def act_decl(
-        values: tuple[Message | Enum | Service]
-    ) -> Decl[ast.Enum | ast.Message | ast.Service]:
+    def act_decl(values: tuple[Message | Enum | Service]) -> Decl[ast.Enum | ast.Message | ast.Service]:
         return values[0]
 
     def act_item(
@@ -1120,11 +1037,10 @@ class GrammarBuilder:
             return None
         return values[0]
 
-    def act_items(
-        values: tuple[Item, Items] | Epsilon
-    ) -> Items[list]:
+    def act_items(values: tuple[Item, Items] | Epsilon) -> Items[list]:
         if len(values) == 0:
             return []
+
         head = [values[0]] if values[0] is not None else []
         return head + values[1]
 
@@ -1176,4 +1092,3 @@ class GrammarBuilder:
 
         cls._cache = Grammar(start=File.symbol, productions=tuple(productions))
         return cls._cache
-
