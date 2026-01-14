@@ -4,9 +4,9 @@ from functools import cached_property
 from typing import TYPE_CHECKING
 
 from .symbol import NonTerminal
+from .spans import Span
 
 if TYPE_CHECKING:
-    from .spans import Span
     from .symbol import Terminal
 
 
@@ -126,7 +126,7 @@ class OptionName(Node, NonTerminal):
     # after the closing paren.
     custom: bool
     base: QualifiedName
-    suffix: OptionSuffix = OptionSuffix()
+    suffix: OptionSuffix = field(default_factory=lambda: OptionSuffix(span=Span.empty()))
 
     def format(self) -> str:
         """Format option name, including custom options."""
@@ -286,8 +286,7 @@ class FieldOptionItems(Node, NonTerminal):
     value: tuple[Option, ...] = ()
 
     def format(self) -> str:
-        # TODO format
-        ...
+        return ", ".join(opt.format() for opt in self.value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,7 +299,7 @@ class FieldOptions(Node, NonTerminal):
 
     """
 
-    items: FieldOptionItems = FieldOptionItems()
+    items: FieldOptionItems = field(default_factory=lambda: FieldOptionItems(span=Span.empty()))
 
     def format(self) -> str:
         return self.items.format()
@@ -323,8 +322,7 @@ class MapKeyType(Node, NonTerminal):
     ident: Ident
 
     def format(self) -> str:
-        # TODO format
-        ...
+        return self.ident.format()
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,8 +339,7 @@ class MapType(Node, NonTerminal):
     value_type: QualifiedName
 
     def format(self) -> str:
-        # TODO format
-        ...
+        return f"map<{self.key_type.format()}, {self.value_type.format()}>"
 
 
 @dataclass(frozen=True, slots=True)
@@ -426,11 +423,20 @@ class TypeRef(Node, NonTerminal):
 
 @dataclass(frozen=True, slots=True)
 class OneofField(Node, NonTerminal):
-    # TODO docstring
+    """A field in a oneof, or an empty line.
+
+    Examples:
+      - string name = 1;
+      - (empty line with semicolon)
+
+    """
 
     field: Field | None = None
 
-    # TODO format
+    def format(self) -> str:
+        if self.field is None:
+            return ""
+        return self.field.format()
 
 
 @dataclass(frozen=True, slots=True)
@@ -444,7 +450,12 @@ class OneofBody(Node, NonTerminal):
 
     fields: tuple[OneofField, ...] = ()
 
-    # TODO format
+    def format(self, indent: int = 0) -> list[str]:
+        return [
+            _indent(oneof_field.format() + ";", indent)
+            for oneof_field in self.fields
+            if oneof_field.field is not None
+        ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -462,7 +473,11 @@ class Oneof(Node, NonTerminal):
     name: Ident
     body: OneofBody
 
-    # TODO format
+    def format(self, indent: int = 0) -> list[str]:
+        output = [_indent(f"oneof {self.name.format()} {{", indent)]
+        output.extend(self.body.format(indent + 2))
+        output.append(_indent("}", indent))
+        return output
 
 
 @dataclass(frozen=True, slots=True)
@@ -479,7 +494,10 @@ class ReservedRange(Node, NonTerminal):
     start: PrimitiveConstant
     end: PrimitiveConstant | Ident | None = None  # inclusive; None means single value
 
-    # TODO format
+    def format(self) -> str:
+        if self.end is None:
+            return self.start.format()
+        return f"{self.start.format()} to {self.end.format()}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -503,7 +521,8 @@ class ReservedRanges(Node, NonTerminal):
 
     ranges: tuple[ReservedRange, ...] = ()
 
-    # TODO format
+    def format(self) -> str:
+        return ", ".join(r.format() for r in self.ranges)
 
 
 @dataclass(frozen=True, slots=True)
@@ -517,7 +536,8 @@ class ReservedNames(Node, NonTerminal):
 
     names: tuple[Ident, ...] = ()
 
-    # TODO format
+    def format(self) -> str:
+        return ", ".join(f'"{n.format()}"' for n in self.names)
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,10 +550,13 @@ class ReservedSpec(Node, NonTerminal):
 
     """
 
-    ranges: ReservedRanges = ReservedRanges()
-    names: ReservedNames = ReservedNames()
+    ranges: ReservedRanges = field(default_factory=lambda: ReservedRanges(span=Span.empty()))
+    names: ReservedNames = field(default_factory=lambda: ReservedNames(span=Span.empty()))
 
-    # TODO format
+    def format(self) -> str:
+        if self.ranges.ranges:
+            return self.ranges.format()
+        return self.names.format()
 
 
 @dataclass(frozen=True, slots=True)
@@ -549,7 +572,8 @@ class Reserved(Node, NonTerminal):
 
     spec: ReservedSpec
 
-    # TODO format
+    def format(self) -> str:
+        return f"reserved {self.spec.format()}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -567,7 +591,11 @@ class EnumValue(Node, NonTerminal):
     number: PrimitiveConstant
     options: FieldOptions
 
-    # TODO format
+    def format(self, indent: int = 0) -> str:
+        value_str = f"{self.name.format()} = {self.number.format()}"
+        if not self.options.is_empty():
+            value_str += f" [{self.options.format()}]"
+        return _indent(value_str + ";", indent)
 
 
 @dataclass(frozen=True, slots=True)
@@ -584,7 +612,14 @@ class EnumElem(Node, NonTerminal):
 
     element: EnumValue | OptionStmt | Reserved | None = None
 
-    # TODO format
+    def format(self, indent: int = 0) -> str:
+        if self.element is None:
+            return ""
+        if isinstance(self.element, EnumValue):
+            return self.element.format(indent)
+        if isinstance(self.element, OptionStmt):
+            return self.element.format(indent)
+        return _indent(self.element.format() + ";", indent)
 
 
 @dataclass(frozen=True, slots=True)
@@ -598,7 +633,13 @@ class EnumBody(Node, NonTerminal):
 
     elements: tuple[EnumElem, ...] = ()
 
-    # TODO format
+    def format(self, indent: int = 0) -> list[str]:
+        output = []
+        for elem in self.elements:
+            formatted = elem.format(indent)
+            if formatted:
+                output.append(formatted)
+        return output
 
 
 @dataclass(frozen=True, slots=True)
@@ -617,7 +658,11 @@ class Enum(Node, NonTerminal):
     name: Ident
     body: EnumBody
 
-    # TODO format
+    def format(self, indent: int = 0) -> list[str]:
+        output = [_indent(f"enum {self.name.format()} {{", indent)]
+        output.extend(self.body.format(indent + 2))
+        output.append(_indent("}", indent))
+        return output
 
 
 @dataclass(frozen=True, slots=True)
@@ -637,7 +682,17 @@ class MessageElem(Node, NonTerminal):
 
     element: Field | Oneof | Enum | Message | OptionStmt | Reserved | None = None
 
-    # TODO format
+    def format(self, indent: int = 0) -> list[str]:
+        if self.element is None:
+            return []
+        if isinstance(self.element, OptionStmt):
+            return [self.element.format(indent)]
+        if isinstance(self.element, Reserved):
+            return [_indent(self.element.format() + ";", indent)]
+        if isinstance(self.element, Field):
+            return [_indent(self.element.format() + ";", indent)]
+        # Oneof, Enum, Message return list[str]
+        return self.element.format(indent)
 
 
 @dataclass(frozen=True, slots=True)
@@ -651,7 +706,11 @@ class MessageBody(Node, NonTerminal):
 
     elements: tuple[MessageElem, ...] = ()
 
-    # TODO format
+    def format(self, indent: int = 0) -> list[str]:
+        output = []
+        for elem in self.elements:
+            output.extend(elem.format(indent))
+        return output
 
 
 @dataclass(frozen=True, slots=True)
@@ -670,7 +729,11 @@ class Message(Node, NonTerminal):
     name: Ident
     body: MessageBody
 
-    # TODO format
+    def format(self, indent: int = 0) -> list[str]:
+        output = [_indent(f"message {self.name.format()} {{", indent)]
+        output.extend(self.body.format(indent + 2))
+        output.append(_indent("}", indent))
+        return output
 
 
 @dataclass(frozen=True, slots=True)
@@ -685,7 +748,8 @@ class StreamOption(Node, NonTerminal):
 
     stream: bool = False
 
-    # TODO format
+    def format(self) -> str:
+        return "stream " if self.stream else ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -700,7 +764,10 @@ class RpcBodyElem(Node, NonTerminal):
 
     option: OptionStmt | None = None
 
-    # TODO format
+    def format(self, indent: int = 0) -> str:
+        if self.option is None:
+            return ""
+        return self.option.format(indent)
 
 
 @dataclass(frozen=True, slots=True)
@@ -714,7 +781,13 @@ class RpcBody(Node, NonTerminal):
 
     options: tuple[RpcBodyElem, ...] = ()
 
-    # TODO format
+    def format(self, indent: int = 0) -> list[str]:
+        output = []
+        for elem in self.options:
+            formatted = elem.format(indent)
+            if formatted:
+                output.append(formatted)
+        return output
 
 
 @dataclass(frozen=True, slots=True)
@@ -737,7 +810,22 @@ class Rpc(Node, NonTerminal):
     response_stream: StreamOption
     options: RpcBody
 
-    # TODO format
+    def format(self, indent: int = 0) -> list[str]:
+        request_type = f"{self.request_stream.format()}{self.request.format()}"
+        response_type = f"{self.response_stream.format()}{self.response.format()}"
+        header = _indent(
+            f"rpc {self.name.format()} ({request_type}) returns ({response_type})",
+            indent
+        )
+
+        body_lines = self.options.format(indent + 2)
+        if not body_lines:
+            return [header + ";"]
+
+        output = [header + " {"]
+        output.extend(body_lines)
+        output.append(_indent("}", indent))
+        return output
 
 
 @dataclass(frozen=True, slots=True)
@@ -753,7 +841,12 @@ class ServiceElem(Node, NonTerminal):
 
     element: Rpc | OptionStmt | None = None
 
-    # TODO format
+    def format(self, indent: int = 0) -> list[str]:
+        if self.element is None:
+            return []
+        if isinstance(self.element, OptionStmt):
+            return [self.element.format(indent)]
+        return self.element.format(indent)
 
 
 @dataclass(frozen=True, slots=True)
@@ -767,7 +860,11 @@ class ServiceBody(Node, NonTerminal):
 
     elements: tuple[ServiceElem, ...] = ()
 
-    # TODO format
+    def format(self, indent: int = 0) -> list[str]:
+        output = []
+        for elem in self.elements:
+            output.extend(elem.format(indent))
+        return output
 
 
 @dataclass(frozen=True, slots=True)
@@ -785,7 +882,11 @@ class Service(Node, NonTerminal):
     name: Ident
     body: ServiceBody
 
-    # TODO format
+    def format(self, indent: int = 0) -> list[str]:
+        output = [_indent(f"service {self.name.format()} {{", indent)]
+        output.extend(self.body.format(indent + 2))
+        output.append(_indent("}", indent))
+        return output
 
 
 @dataclass(frozen=True, slots=True)
@@ -806,7 +907,20 @@ class ProtoItem(Node, NonTerminal):
 
     item: Syntax | Import | Package | OptionStmt | Message | Enum | Service | None = None
 
-    # TODO format
+    def format(self, indent: int = 0) -> list[str]:
+        if self.item is None:
+            return []
+        if isinstance(self.item, (Syntax, Import, Package, OptionStmt)):
+            if isinstance(self.item, Syntax):
+                return [f'syntax = "{self.item.value}";']
+            if isinstance(self.item, Import):
+                modifier = f"{self.item.modifier.format()} " if self.item.modifier else ""
+                return [f'import {modifier}"{self.item.path.format()}";']
+            if isinstance(self.item, Package):
+                return [f"package {self.item.name.format()};"]
+            return [self.item.format(indent)]
+        # Message, Enum, Service return list[str]
+        return self.item.format(indent)
 
 
 @dataclass(frozen=True, slots=True)
@@ -827,29 +941,85 @@ class ProtoFile(Node, NonTerminal):
 
     """
 
-    syntax: Syntax | None = None
     items: tuple[ProtoItem, ...] = ()
-
-    # convenience indexes; computed by parser/loader
-    imports: tuple[Import, ...] = field(default_factory=tuple)
-    package: Package | None = None
 
     @cached_property
     def syntax(self) -> Syntax | None:
-        # TODO
-        ...
+        """Extract the syntax declaration from items."""
+        for item in self.items:
+            if item.item is not None and isinstance(item.item, Syntax):
+                return item.item
+        return None
 
     @cached_property
-    def imports(self):
-        # TODO
-        ...
+    def imports(self) -> tuple[Import, ...]:
+        """Extract all import statements from items."""
+        return tuple(
+            item.item
+            for item in self.items
+            if item.item is not None and isinstance(item.item, Import)
+        )
 
     @cached_property
-    def package(self):
-        # TODO
-        ...
+    def package(self) -> Package | None:
+        """Extract the package declaration from items."""
+        for item in self.items:
+            if item.item is not None and isinstance(item.item, Package):
+                return item.item
+        return None
 
-    # TODO format
+    def _group_items(self) -> tuple[
+        list[ProtoItem], list[ProtoItem], list[ProtoItem], list[ProtoItem]
+    ]:
+        """Group items by type: syntax, imports, package, and others."""
+        syntax_items = []
+        import_items = []
+        package_items = []
+        other_items = []
+
+        for item in self.items:
+            if item.item is None:
+                continue
+            if isinstance(item.item, Syntax):
+                syntax_items.append(item)
+            elif isinstance(item.item, Import):
+                import_items.append(item)
+            elif isinstance(item.item, Package):
+                package_items.append(item)
+            else:
+                other_items.append(item)
+
+        return syntax_items, import_items, package_items, other_items
+
+    def _format_item_group(self, items: list[ProtoItem]) -> list[str]:
+        """Format a group of items with trailing blank line."""
+        output: list[str] = []
+        for item in items:
+            output.extend(item.format())
+        if items:
+            output.append("")
+        return output
+
+    def format(self) -> str:
+        syntax_items, import_items, package_items, other_items = (
+            self._group_items()
+        )
+
+        output: list[str] = []
+        output.extend(self._format_item_group(syntax_items))
+        output.extend(self._format_item_group(import_items))
+        output.extend(self._format_item_group(package_items))
+
+        # Format other declarations with blank lines between
+        for item in other_items:
+            output.extend(item.format())
+            output.append("")
+
+        # Remove trailing blank lines
+        while output and output[-1] == "":
+            output.pop()
+
+        return "\n".join(output) + "\n" if output else ""
 
 
 def _indent(line: str, indent: int) -> str:
