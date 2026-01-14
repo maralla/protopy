@@ -1,4 +1,6 @@
 class _Meta(type):
+    symbol_name: str
+
     def __repr__(cls) -> str:
         return cls.__name__
 
@@ -27,13 +29,13 @@ class Terminal(metaclass=_Meta):
         elif not hasattr(cls, 'name'):
             cls.name = cls.__name__
 
+        cls.symbol_name = cls.name
+
         super().__init_subclass__(**kwargs)
 
 
 class NonTerminal(metaclass=_Meta):
     """Base class for non-terminal symbols in the grammar."""
-
-    symbol_name: str
 
     def __init__(self, value: object = None) -> None:
         self.value = value

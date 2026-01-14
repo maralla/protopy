@@ -1,11 +1,12 @@
 from dataclasses import dataclass, field
+from functools import cached_property
 
 from typing import TYPE_CHECKING
 
 from .symbol import NonTerminal
+from .spans import Span
 
 if TYPE_CHECKING:
-    from .spans import Span
     from .symbol import Terminal
 
 
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
 class Node:
     """Base class for all AST nodes."""
 
-    span: Span
+    span: Span = Span()
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,7 +182,7 @@ class MessageFields(Node, NonTerminal):
 
     """
 
-    fields: list[MessageField] = ()
+    fields: tuple[MessageField, ...] = ()
 
     def format(self) -> str:
         return ", ".join(f.format() for f in self.fields)
@@ -274,20 +275,98 @@ class OptionStmt(Node, NonTerminal):
 
 
 @dataclass(frozen=True, slots=True)
-class FieldOption(Node):
-    """A field-level option (used in field definitions).
+class FieldOptionItems(Node, NonTerminal):
+    """A list of field options (without brackets).
 
     Examples:
-      - string name = 1 [deprecated = true];
-      - int32 id = 2 [json_name = "userId"];
+      - deprecated = true, json_name = "userId"
 
     """
 
-    option: Option
+    value: tuple[Option, ...] = ()
+
+    def format(self) -> str:
+        # TODO format
+        ...
 
 
 @dataclass(frozen=True, slots=True)
-class Field(Node):
+class FieldOptions(Node, NonTerminal):
+    """Field options wrapped in brackets.
+
+    Examples:
+      - [deprecated = true]
+      - [deprecated = true, json_name = "userId"]
+
+    """
+
+    items: FieldOptionItems = FieldOptionItems()
+
+    def format(self) -> str:
+        return self.items.format()
+
+    def is_empty(self) -> bool:
+        return len(self.items.value) == 0
+
+
+@dataclass(frozen=True, slots=True)
+class MapKeyType(Node, NonTerminal):
+    """Map key type identifier.
+
+    Examples:
+      - int32
+      - string
+      - bool
+
+    """
+
+    ident: Ident
+
+    def format(self) -> str:
+        # TODO format
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class MapType(Node, NonTerminal):
+    """Map type specification.
+
+    Examples:
+      - map<string, int32>
+      - map<int32, MyMessage>
+
+    """
+
+    key_type: MapKeyType
+    value_type: QualifiedName
+
+    def format(self) -> str:
+        # TODO format
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class FieldLabel(Node, NonTerminal):
+    """Field label (repeated or nothing).
+
+    Examples:
+      - repeated
+      - (nothing)
+
+    """
+
+    none: bool = False
+    repeated: bool = False
+
+    def format(self) -> str:
+        if self.repeated:
+            return "repeated "
+
+        return ""
+
+
+@dataclass(frozen=True, slots=True)
+class Field(Node, NonTerminal):
     """A field definition in a message or oneof.
 
     Examples:
@@ -298,46 +377,25 @@ class Field(Node):
 
     """
 
-    name: str
-    number: int
-    type_name: QualifiedName | None = None
-    scalar_type: str | None = None
-    map_key_type: str | None = None  # only for map<k,v>
-    map_value: TypeRef | None = None
-    repeated: bool = False
-    options: tuple[FieldOption, ...] = ()
+    name: Ident
+    number: PrimitiveConstant
+    field_type: QualifiedName | MapType
+    label: FieldLabel
+    options: FieldOptions
 
     def format(self) -> str:
-        """Format a field definition."""
-        if self.map_key_type is not None and self.map_value is not None:
-            value_type = self.map_value.format()
-            type_str = f"map<{self.map_key_type}, {value_type}>"
-            label = ""
-        else:
-            type_str = self._format_type()
-            label = "repeated " if self.repeated else ""
+        result = self.label.format()
+        result += self.field_type.format()
+        result += " " + self.name.format() + " = " + self.number.format()
 
-        result = f"{label}{type_str} {self.name} = {self.number}"
-
-        if self.options:
-            options_str = ", ".join(opt.option.format() for opt in self.options)
-            result += f" [{options_str}]"
+        if not self.options.is_empty():
+            result += f" [{self.options.format()}]"
 
         return result
 
-    def _format_type(self) -> str:
-        """Format the type name of a field."""
-        if self.scalar_type is not None:
-            return self.scalar_type
-
-        if self.type_name is None:
-            return "/*missing-type*/"
-
-        return str(self.type_name)
-
 
 @dataclass(frozen=True, slots=True)
-class TypeRef(Node):
+class TypeRef(Node, NonTerminal):
     """A type reference for scalar or message types.
 
     This represents individual types like int32 or MyMessage, but not
@@ -367,7 +425,30 @@ class TypeRef(Node):
 
 
 @dataclass(frozen=True, slots=True)
-class Oneof(Node):
+class OneofField(Node, NonTerminal):
+    # TODO docstring
+
+    field: Field | None = None
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class OneofBody(Node, NonTerminal):
+    """Body of a oneof definition.
+
+    Examples:
+      - (list of oneof fields)
+
+    """
+
+    fields: tuple[OneofField, ...] = ()
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class Oneof(Node, NonTerminal):
     """A oneof group in a message.
 
     Examples:
@@ -378,20 +459,14 @@ class Oneof(Node):
 
     """
 
-    name: str
-    fields: tuple[Field, ...] = ()
+    name: Ident
+    body: OneofBody
 
-    def format(self, indent: int = 0) -> list[str]:
-        """Format a oneof definition."""
-        output = [_indent(f"oneof {self.name} {{", indent)]
-        output.extend(_indent(e.format() + ";", indent + 2) for e in self.fields)
-        output.append(_indent("}", indent))
-
-        return output
+    # TODO format
 
 
 @dataclass(frozen=True, slots=True)
-class ReservedRange(Node):
+class ReservedRange(Node, NonTerminal):
     """A reserved field number range.
 
     Examples:
@@ -401,21 +476,68 @@ class ReservedRange(Node):
 
     """
 
-    start: int
-    end: int | None = None  # inclusive; None means single value
-    end_is_max: bool = False
+    start: PrimitiveConstant
+    end: PrimitiveConstant | Ident | None = None  # inclusive; None means single value
 
-    def format(self) -> str:
-        """Format a reserved range."""
-        if self.end_is_max:
-            return f"{self.start} to max"
-        if self.end is None:
-            return str(self.start)
-        return f"{self.start} to {self.end}"
+    # TODO format
 
 
 @dataclass(frozen=True, slots=True)
-class Reserved(Node):
+class RangeCollector(Node, NonTerminal):
+    ranges: tuple[ReservedRange, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class NameCollector(Node, NonTerminal):
+    names: tuple[Ident, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ReservedRanges(Node, NonTerminal):
+    """A list of reserved ranges.
+
+    Examples:
+      - 2, 15, 9 to 11
+
+    """
+
+    ranges: tuple[ReservedRange, ...] = ()
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class ReservedNames(Node, NonTerminal):
+    """A list of reserved names.
+
+    Examples:
+      - "foo", "bar"
+
+    """
+
+    names: tuple[Ident, ...] = ()
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class ReservedSpec(Node, NonTerminal):
+    """Reserved specification (either ranges or names).
+
+    Examples:
+      - 2, 15, 9 to 11
+      - "foo", "bar"
+
+    """
+
+    ranges: ReservedRanges = ReservedRanges()
+    names: ReservedNames = ReservedNames()
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class Reserved(Node, NonTerminal):
     """Reserved field numbers or field names.
 
     Examples:
@@ -425,24 +547,13 @@ class Reserved(Node):
 
     """
 
-    ranges: tuple[ReservedRange, ...] = ()
-    names: tuple[str, ...] = ()
+    spec: ReservedSpec
 
-    def format(self) -> str:
-        """Format a reserved statement."""
-        parts = ["reserved"]
-
-        if self.ranges:
-            range_strings = [r.format() for r in self.ranges]
-            parts.append(", ".join(range_strings))
-        else:
-            parts.append(", ".join(f'"{name}"' for name in self.names))
-
-        return " ".join(parts)
+    # TODO format
 
 
 @dataclass(frozen=True, slots=True)
-class EnumValue(Node):
+class EnumValue(Node, NonTerminal):
     """An enum value definition.
 
     Examples:
@@ -452,23 +563,46 @@ class EnumValue(Node):
 
     """
 
-    name: str
-    number: int
-    options: tuple[FieldOption, ...] = ()
+    name: Ident
+    number: PrimitiveConstant
+    options: FieldOptions
 
-    def format(self, indent: int = 0) -> str:
-        """Format an enum value."""
-        value_str = f"{self.name} = {self.number}"
-
-        if self.options:
-            options_str = ", ".join(opt.option.format() for opt in self.options)
-            value_str += f" [{options_str}]"
-
-        return _indent(value_str + ";", indent)
+    # TODO format
 
 
 @dataclass(frozen=True, slots=True)
-class Enum(Node):
+class EnumElem(Node, NonTerminal):
+    """An element in an enum body.
+
+    Examples:
+      - enum value
+      - option statement
+      - reserved statement
+      - (empty line)
+
+    """
+
+    element: EnumValue | OptionStmt | Reserved | None = None
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class EnumBody(Node, NonTerminal):
+    """Body of an enum definition.
+
+    Examples:
+      - (list of enum values, options, and reserved statements)
+
+    """
+
+    elements: tuple[EnumElem, ...] = ()
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class Enum(Node, NonTerminal):
     """An enum definition.
 
     Examples:
@@ -480,36 +614,48 @@ class Enum(Node):
 
     """
 
-    name: str
-    body: tuple[OptionStmt | Reserved | EnumValue | Message | Enum, ...] = ()
+    name: Ident
+    body: EnumBody
 
-    def format(self, indent: int = 0) -> list[str]:
-        """Format an enum definition."""
-        output = [_indent(f"enum {self.name} {{", indent)]
-
-        for element in self.body:
-            if isinstance(element, OptionStmt):
-                output.append(element.format(indent + 2))
-
-            elif isinstance(element, Reserved):
-                output.append(_indent(element.format() + ";", indent + 2))
-
-            elif isinstance(element, EnumValue):
-                output.append(element.format(indent + 2))
-
-            elif isinstance(element, (Message, Enum)):
-                output.extend(element.format(indent + 2))
-
-            else:
-                msg = f"/* unsupported enum element: {type(element).__name__} */"
-                output.append(_indent(msg, indent + 2))
-
-        output.append(_indent("}", indent))
-        return output
+    # TODO format
 
 
 @dataclass(frozen=True, slots=True)
-class Message(Node):
+class MessageElem(Node, NonTerminal):
+    """An element in a message body.
+
+    Examples:
+      - field
+      - oneof
+      - nested message
+      - enum
+      - option statement
+      - reserved statement
+      - (empty line)
+
+    """
+
+    element: Field | Oneof | Enum | Message | OptionStmt | Reserved | None = None
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class MessageBody(Node, NonTerminal):
+    """Body of a message definition.
+
+    Examples:
+      - (list of fields, oneofs, nested messages, enums, options, and reserved statements)
+
+    """
+
+    elements: tuple[MessageElem, ...] = ()
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class Message(Node, NonTerminal):
     """A message definition.
 
     Examples:
@@ -521,29 +667,54 @@ class Message(Node):
 
     """
 
-    name: str
-    body: tuple[OptionStmt | Reserved | Field | Oneof | Message | Enum, ...] = ()
+    name: Ident
+    body: MessageBody
 
-    def format(self, indent: int = 0) -> list[str]:
-        """Format a message definition."""
-        output = [_indent(f"message {self.name} {{", indent)]
+    # TODO format
 
-        for element in self.body:
-            if isinstance(element, OptionStmt):
-                output.append(element.format(indent + 2))
 
-            elif isinstance(element, (Reserved, Field)):
-                output.append(_indent(element.format() + ";", indent + 2))
+@dataclass(frozen=True, slots=True)
+class StreamOption(Node, NonTerminal):
+    """Stream option for RPC parameters.
 
-            elif isinstance(element, (Oneof, Enum, Message)):
-                output.extend(element.format(indent + 2))
+    Examples:
+      - stream
+      - (nothing)
 
-            else:
-                msg = f"/* unsupported message element: {type(element).__name__} */"
-                output.append(_indent(msg, indent + 2))
+    """
 
-        output.append(_indent("}", indent))
-        return output
+    stream: bool = False
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class RpcBodyElem(Node, NonTerminal):
+    """An element in an RPC body.
+
+    Examples:
+      - option statement
+      - (empty line)
+
+    """
+
+    option: OptionStmt | None = None
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class RpcBody(Node, NonTerminal):
+    """Body of an RPC method.
+
+    Examples:
+      - (list of options)
+
+    """
+
+    options: tuple[RpcBodyElem, ...] = ()
+
+    # TODO format
 
 
 @dataclass(frozen=True, slots=True)
@@ -559,38 +730,48 @@ class Rpc(Node, NonTerminal):
 
     """
 
-    name: str
-    request: TypeRef
-    response: TypeRef
-    request_stream: bool = False
-    response_stream: bool = False
-    options: tuple[OptionStmt, ...] = ()
+    name: Ident
+    request: QualifiedName
+    response: QualifiedName
+    request_stream: StreamOption
+    response_stream: StreamOption
+    options: RpcBody
 
-    def format(self, indent: int = 0) -> list[str]:
-        """Format an RPC method definition."""
-        request_type = self.request.format()
-        response_type = self.response.format()
-
-        if self.request_stream:
-            request_type = "stream " + request_type
-
-        if self.response_stream:
-            response_type = "stream " + response_type
-
-        header = _indent(f"rpc {self.name} ({request_type}) returns ({response_type})", indent)
-
-        if not self.options:
-            return [header + ";"]
-
-        output = [header + " {"]
-        output.extend(option.format(indent + 2) for option in self.options)
-
-        output.append(_indent("}", indent))
-        return output
+    # TODO format
 
 
 @dataclass(frozen=True, slots=True)
-class Service(Node):
+class ServiceElem(Node, NonTerminal):
+    """An element in a service body.
+
+    Examples:
+      - RPC
+      - option statement
+      - (empty line)
+
+    """
+
+    element: Rpc | OptionStmt | None = None
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceBody(Node, NonTerminal):
+    """Body of a service definition.
+
+    Examples:
+      - (list of RPCs and options)
+
+    """
+
+    elements: tuple[ServiceElem, ...] = ()
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class Service(Node, NonTerminal):
     """A service definition.
 
     Examples:
@@ -601,33 +782,35 @@ class Service(Node):
 
     """
 
-    name: str
-    body: tuple[OptionStmt | Rpc, ...] = ()
+    name: Ident
+    body: ServiceBody
 
-    def format(self, indent: int = 0) -> list[str]:
-        """Format a service definition."""
-        output = [_indent(f"service {self.name} {{", indent)]
-
-        for element in self.body:
-            if isinstance(element, OptionStmt):
-                output.append(element.format(indent + 2))
-
-            elif isinstance(element, Rpc):
-                output.extend(element.format(indent + 2))
-
-            else:
-                msg = f"/* unsupported service element: {type(element).__name__} */"
-                output.append(_indent(msg, indent + 2))
-
-        output.append(_indent("}", indent))
-        return output
-
-
-TopLevel = Import | Package | OptionStmt | Message | Enum | Service
+    # TODO format
 
 
 @dataclass(frozen=True, slots=True)
-class ProtoFile(Node):
+class ProtoItem(Node, NonTerminal):
+    """A top-level item in a proto file.
+
+    Examples:
+      - syntax statement
+      - import statement
+      - package statement
+      - option statement
+      - message
+      - enum
+      - service
+      - (empty line)
+
+    """
+
+    item: Syntax | Import | Package | OptionStmt | Message | Enum | Service | None = None
+
+    # TODO format
+
+
+@dataclass(frozen=True, slots=True)
+class ProtoFile(Node, NonTerminal):
     """A complete proto3 file.
 
     Examples:
@@ -645,62 +828,28 @@ class ProtoFile(Node):
     """
 
     syntax: Syntax | None = None
-    items: tuple[TopLevel, ...] = ()
+    items: tuple[ProtoItem, ...] = ()
 
     # convenience indexes; computed by parser/loader
     imports: tuple[Import, ...] = field(default_factory=tuple)
     package: Package | None = None
 
-    def format(self) -> str:
-        """Format the entire proto file."""
-        output: list[str] = []
+    @cached_property
+    def syntax(self) -> Syntax | None:
+        # TODO
+        ...
 
-        # Format syntax declaration
-        if self.syntax is not None:
-            output.append(f'syntax = "{self.syntax.value}";')
-            output.append("")
+    @cached_property
+    def imports(self):
+        # TODO
+        ...
 
-        # Separate items by type
-        imports = [item for item in self.items if isinstance(item, Import)]
-        package = next((item for item in self.items if isinstance(item, Package)), None)
-        declarations = [
-            item for item in self.items
-            if not isinstance(item, (Import, Package, Syntax))
-        ]
+    @cached_property
+    def package(self):
+        # TODO
+        ...
 
-        # Format imports
-        for import_stmt in imports:
-            if import_stmt.modifier:
-                output.append(f'import {import_stmt.modifier} "{import_stmt.path}";')
-            else:
-                output.append(f'import "{import_stmt.path}";')
-
-        if imports:
-            output.append("")
-
-        # Format package declaration
-        if package is not None:
-            output.append(f"package {package.name};")
-            output.append("")
-
-        # Format top-level declarations
-        for declaration in declarations:
-            if isinstance(declaration, OptionStmt):
-                output.append(declaration.format(0))
-
-            elif isinstance(declaration, (Message, Enum, Service)):
-                output.extend(declaration.format(0))
-
-            else:
-                output.append(f"/* unsupported top-level node: {type(declaration).__name__} */")
-
-            output.append("")
-
-        # Remove trailing blank lines
-        while output and output[-1] == "":
-            output.pop()
-
-        return "\n".join(output) + "\n"
+    # TODO format
 
 
 def _indent(line: str, indent: int) -> str:
