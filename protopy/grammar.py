@@ -2,8 +2,6 @@ import itertools
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Union, get_type_hints, get_origin, get_args, Generic, TypeVar
 
-T = TypeVar('T')
-
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -404,21 +402,13 @@ class GrammarBuilder:
     # Semantic actions: Constants
     # -----------------------------------------------------------------------
 
-    @staticmethod
-    def act_const(
-        values: tuple[INT | FLOAT | STRING | TRUE | FALSE | QualifiedName | Aggregate]
-    ) -> ast.Constant:
+    def act_primitive_const(values: tuple[INT | FLOAT | STRING | TRUE | FALSE]) -> ast.PrimitiveConstant:
         value = values[0]
+        return ast.PrimitiveConstant(span=value.span, kind=value.kind, value=value.lexeme)
 
-        if isinstance(value, ast.QualifiedName):
-            # Identifier constant
-            return ast.Constant(
-                span=value.span, kind=CONST_IDENT, value=value
-            )
-
-        return ast.Constant(span: value.span, value=value)
-        # Aggregate constant (already an ast.Constant)
-        return Const(value)
+    def act_const(values: tuple[ast.PrimitiveConstant | ast.QualifiedName | ast.MessageConstant]) -> ast.Constant:
+        value = values[0]
+        return ast.Constant(span=value.span, value=value)
 
     # -----------------------------------------------------------------------
     # Semantic actions: Qualified names
@@ -428,71 +418,72 @@ class GrammarBuilder:
         value = values[0]
         return ast.Ident(span=value.span, text=values[0].lexeme)
 
-    def act_name_tail(values: tuple[DOT, Ident, NameTail] | Epsilon) -> NameTail[list]:
-        if len(values) == 0:
-            return NameTail([])
+    def act_dotted_name(values: tuple[DOT, ast.Ident, ast.DottedName] | Epsilon) -> ast.DottedName:
+        if values is EPSILON:
+            return ast.DottedName()
 
-        return NameTail([values[1]] + values[2])
+        ident = values[1]
+        name = values[2]
+        return ast.DottedName(span=join_span(values[0], name), parts=[ident, *name.parts])
 
-    def act_qualified_name_absolute(values: tuple[DOT, Ident, NameTail]) -> QualifiedName[ast.QualifiedName]:
-        ident_tok: Token = values[1]
-        tail: list[Token] = values[2]
-        last = tail[-1] if tail else ident_tok
+    def act_qualified_name_absolute(values: tuple[DOT, ast.Ident, ast.DottedName]) -> ast.QualifiedName:
+        ident = values[1]
+        name = values[2]
 
-        return QualifiedName(ast.QualifiedName(
-            span=join_span(values[0], last),
+        return ast.QualifiedName(
+            span=join_span(values[0], name),
             absolute=True,
-            parts=tuple([ident_tok.lexeme] + [tok.lexeme for tok in tail]),
-        ))
+            name=ast.DottedName(span=join_span(ident, name), parts=[ident, *name.parts])
+        )
 
-    def act_qualified_name_relative(values: tuple[Ident, NameTail]) -> QualifiedName[ast.QualifiedName]:
-        ident_tok: Token = values[0].value
-        tail: list[Token] = values[1].value
-        last = tail[-1] if tail else ident_tok
+    def act_qualified_name_relative(values: tuple[ast.Ident, ast.DottedName]) -> ast.QualifiedName:
+        ident = values[0]
+        name = values[1]
 
-        return QualifiedName(ast.QualifiedName(
-            span=join_span(ident_tok, last),
+        return ast.QualifiedName(
+            span=join_span(ident, name),
             absolute=False,
-            parts=tuple([ident_tok.lexeme] + [tok.lexeme for tok in tail]),
-        ))
+            name=ast.DottedName(span=join_span(ident, name), parts=[ident, *name.parts])
+        )
 
     # -----------------------------------------------------------------------
-    # Semantic actions: Aggregates
+    # Semantic actions: Message constant
     # -----------------------------------------------------------------------
 
-    # def act_opt_comma(values: tuple[COMMA] | Epsilon) -> OptComma[bool]:
-    #    return OptComma(len(values) > 0)
-
-    def act_aggregate_field(values: tuple[ast.Ident, COLON, ast.Constant]) -> ast.MessageField:
+    def act_message_field_literal(values: tuple[ast.Ident, COLON, ast.Constant]) -> ast.MessageField:
         name: Token = values[0]
         const: ast.Constant = values[2]
         return ast.MessageField(span=join_span(name, const), name=name, value=const)
 
-    def act_aggregate_fields(values: tuple[ast.MessageField, COMMA, ast.MessageFields | Epsilon]) -> ast.MessageFields:
-        return AggFields([values[0]] + values[1])
+    def act_message_field_literal_single(values: tuple[ast.MessageField] | Epsilon) -> ast.MessageFields:
+        if values is EPSILON:
+            return ast.MessageFields()
 
-    def act_aggregate(values: tuple[LBRACE, ast.MessageField | ast.MessageFields | Epsilon, RBRACE]) -> ast.MessageConstant:
-        fields: list = values[1]
+        field = values[0]
+        return ast.MessageFields(span=field.span, fields=[field])
 
-        return Aggregate(ast.Constant(
-            span=join_span(values[0], values[2]),
-            kind=CONST_AGGREGATE, value=tuple(fields)
-        ))
+    def act_message_field_literals(values: tuple[ast.MessageField, COMMA, ast.MessageFields]) -> ast.MessageFields:
+        field = values[0]
+        value = values[2]
+
+        return ast.MessageFields(span=join_span(field, value), fields=[field, *value.fields])
+
+    def act_message_constant(values: tuple[LBRACE, ast.MessageFields, RBRACE]) -> ast.MessageConstant:
+        return ast.MessageConstant(span=join_span(values[0], values[2]), value=values[1])
 
     # -----------------------------------------------------------------------
     # Semantic actions: Options
     # -----------------------------------------------------------------------
 
     def act_option_suffix(values: tuple[DOT, Ident, ast.OptionSuffix] | Epsilon) -> ast.OptionSuffix:
-        if len(values) == 0:
+        if values is EPSILON:
             return ast.OptionSuffix()
 
-        tok: Token = values[1]
-        option_suffix = values[2]
-        return ast.OptionSuffix(span=join_span(tok, suffix), suffix=[tok] + option_suffix.suffix)
+        token = values[1]
+        ident = ast.Ident(span=token.span, text=token.lexeme)
 
-    def act_option_name_plain(values: tuple[ast.QualifiedName]) -> OptionName[ast.OptionName]:
-        return OptionName(ast.OptionName(span=qn.span, custom=False, base=values[0])
+        suffix = values[2]
+        return ast.OptionSuffix(span=join_span(values[0], suffix), items=[ident, *suffix.items])
 
     def act_option_name_custom(values: tuple[LPAREN, ast.QualifiedName, RPAREN, ast.OptionSuffix]) -> ast.OptionName:
         suffix = values[3]
@@ -503,25 +494,27 @@ class GrammarBuilder:
             suffix=suffix,
         )
 
-    def act_option(values: tuple[OptionName, EQ, Const]) -> ast.Option:
+    def act_option_name_plain(values: tuple[ast.QualifiedName]) -> ast.OptionName:
+        value = values[0]
+        return ast.OptionName(span=value.span, custom=False, base=value)
+
+    def act_option(values: tuple[ast.OptionName, EQ, ast.Constant]) -> ast.Option:
         name: ast.OptionName = values[0]
         const: ast.Constant = values[2]
+
         return ast.Option(
             span=join_span(name, const),
             name=name, value=const
         )
 
-    def act_option_statement(values: tuple[OPTION, Option, SEMI]) -> ast.OptionStmt:
-        opt: ast.Option = values[1]
-        return ast.OptionStmt(
-            span=join_span(values[0], values[2]), option=opt
-        )
+    def act_option_statement(values: tuple[OPTION, ast.Option, SEMI]) -> ast.OptionStmt:
+        return ast.OptionStmt(span=join_span(values[0], values[2]), option=values[1])
 
     # -----------------------------------------------------------------------
     # Semantic actions: Top-level statements
     # -----------------------------------------------------------------------
 
-    def act_syntax_statement(values: tuple[SYNTAX, EQ, STRING, SEMI]) -> SyntaxStmt[ast.Syntax]:
+    def act_syntax_statement(values: tuple[SYNTAX, EQ, STRING, SEMI]) -> ast.Syntax:
         literal = values[2].lexeme
         if literal != "proto3":
             raise ParseError(
@@ -530,29 +523,31 @@ class GrammarBuilder:
                 hint='use: syntax = "proto3";'
             )
 
-        return SyntaxStmt(ast.Syntax(
+        return ast.Syntax(
             span=join_span(values[0], values[3]), value=literal
-        ))
+        )
 
-    def act_import_modifier(values: tuple[WEAK] | tuple[PUBLIC] | Epsilon) -> ImportModOpt[str | None]:
-        if len(values) == 0:
-            return ImportModOpt(None)
-        tok: Token = values[0]
-        return ImportModOpt(tok.lexeme)
+    def act_import_simple(values: tuple[IMPORT, STRING, SEMI]) -> ast.Import:
+        value = values[1]
+        path = Ident(span=value.span, text=value.lexeme)
+        return ast.Import(span=join_span(values[0], values[2]), path=path)
 
-    def act_import_statement(values: tuple[IMPORT, ImportModOpt, STRING, SEMI]) -> ImportStmt[ast.Import]:
-        modifier: str | None = values[1]
-        path_tok: Token = values[2]
-        return ImportStmt(ast.Import(
+    def act_import_statement(values: tuple[IMPORT, WEAK | PUBLIC, STRING, SEMI]) -> ast.Import:
+        value = values[2]
+        path = Ident(span=value.span, text=value.lexeme)
+
+        modifier_value = values[1]
+        modifier = Ident(span=modifier_value.span, text=modifier_value.name)
+
+        return ast.Import(
             span=join_span(values[0], values[3]),
-            path=path_tok.lexeme, modifier=modifier
-        ))
+            path=path, modifier=modifier
+        )
 
-    def act_package_statement(values: tuple[PACKAGE, QualifiedName, SEMI]) -> PackageStmt[ast.Package]:
-        qn: ast.QualifiedName = values[1]
-        return PackageStmt(ast.Package(
-            span=join_span(values[0], values[2]), name=qn
-        ))
+    def act_package_statement(values: tuple[PACKAGE, ast.QualifiedName, SEMI]) -> ast.Package:
+        return ast.Package(
+            span=join_span(values[0], values[2]), name=values[1]
+        )
 
     # -----------------------------------------------------------------------
     # Semantic actions: Field options

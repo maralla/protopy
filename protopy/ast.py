@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 
 from typing import TYPE_CHECKING
 
+from .symbol import NonTerminal
+
 if TYPE_CHECKING:
     from .spans import Span
     from .symbol import Terminal
@@ -15,7 +17,22 @@ class Node:
 
 
 @dataclass(frozen=True, slots=True)
-class QualifiedName(Node):
+class DottedName(Node, NonTerminal):
+    """Represents a dot separated name.
+
+    Examples:
+      - .foo.bar
+
+    """
+
+    parts: tuple[Ident, ...] = ()
+
+    def format(self) -> str:
+        return ".".join(p.format() for p in self.parts)
+
+
+@dataclass(frozen=True, slots=True)
+class QualifiedName(Node, NonTerminal):
     """A dotted name, optionally absolute (leading dot in source).
 
     Examples:
@@ -26,15 +43,18 @@ class QualifiedName(Node):
     """
 
     absolute: bool
-    parts: tuple[str, ...]
+    name: DottedName
 
     def __str__(self) -> str:
         dot = "." if self.absolute else ""
-        return dot + ".".join(self.parts)
+        return dot + self.name.format()
+
+    def format(self) -> str:
+        return str(self)
 
 
 @dataclass(frozen=True, slots=True)
-class Syntax(Node):
+class Syntax(Node, NonTerminal):
     """Syntax declaration statement.
 
     Examples:
@@ -46,7 +66,7 @@ class Syntax(Node):
 
 
 @dataclass(frozen=True, slots=True)
-class Import(Node):
+class Import(Node, NonTerminal):
     """Import statement.
 
     Examples:
@@ -56,12 +76,12 @@ class Import(Node):
 
     """
 
-    path: str  # raw string literal content, not unescaped
-    modifier: str | None = None  # "weak" | "public" | None
+    path: Ident
+    modifier: Ident | None = None  # "weak" | "public" | None
 
 
 @dataclass(frozen=True, slots=True)
-class Package(Node):
+class Package(Node, NonTerminal):
     """Package declaration statement.
 
     Examples:
@@ -83,10 +103,10 @@ class OptionSuffix(Node, NonTerminal):
 
     """
 
-    suffix: tuple[str, ...] = ()
+    items: tuple[Ident, ...] = ()
 
     def format(self) -> str:
-        return ("." + ".".join(self.suffix)) if self.suffix else ""
+        return ("." + ".".join(ident.format() for ident in self.items)) if self.items else ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,7 +161,7 @@ class MessageField(Node, NonTerminal):
     """A key-value constant value.
 
     Examples:
-      - { foo: 1, bar: "baz" }
+      - foo: 1
 
     """
 
@@ -157,11 +177,11 @@ class MessageFields(Node, NonTerminal):
     """A list of key-value constant value.
 
     Examples:
-      - [ foo: 1, bar: "baz" ]
+      - foo: 1, bar: "baz"
 
     """
 
-    fields: list[MessageField]
+    fields: list[MessageField] = ()
 
     def format(self) -> str:
         return ", ".join(f.format() for f in self.fields)
@@ -175,7 +195,30 @@ class MessageConstant(Node, NonTerminal):
       - { foo: 1, bar: "baz" }
 
     """
-    
+
+    value: MessageFields
+
+    def format(self) -> str:
+        return self.value.format()
+
+
+@dataclass(frozen=True, slots=True)
+class PrimitiveConstant(Node, NonTerminal):
+    """A primitive literal constant value.
+
+    Examples:
+      - 42 (integer)
+      - 3.14 (float)
+      - "hello" (string)
+      - true / false (boolean)
+
+    """
+
+    kind: type[Terminal]
+    value: str
+
+    def format(self) -> str:
+        return self.value
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,46 +226,15 @@ class Constant(Node, NonTerminal):
     """A constant value in proto3.
 
     Examples:
-      - 42 (integer)
-      - 3.14 (float)
-      - "hello" (string)
-      - true / false (boolean)
       - MyEnum.VALUE (identifier)
       - { foo: 1, bar: "baz" } (aggregate/message literal)
 
     """
 
-    kind: type[Terminal]
-    value: Token | QualifiedName
+    value: PrimitiveConstant | QualifiedName | MessageConstant
 
     def format(self) -> str:
-        """Format a constant value."""
-        kind_name = self.kind.name
-
-        value = "/*unknown-const*/"
-
-        if kind_name == "INT":
-            value = str(self.value)
-
-        if kind_name == "FLOAT":
-            value = str(self.value)
-
-        if kind_name == "STRING":
-            value = '"' + str(self.value).replace('"', '\\"') + '"'
-
-        if kind_name in ("true", "false"):
-            value = "true" if self.value else "false"
-
-        if kind_name == "ident":
-            value = str(self.value)
-
-        if kind_name == "aggregate":
-            fields = []
-            for key, value in self.value:
-                fields.append(f"{key}: {value.format()}")
-            value = "{ " + ", ".join(fields) + " }"
-
-        return value
+        return self.value.format()
 
 
 @dataclass(frozen=True, slots=True)
