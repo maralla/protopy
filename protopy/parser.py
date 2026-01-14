@@ -5,18 +5,17 @@ from dataclasses import dataclass
 from .errors import ParseError
 from .grammar import (
     Grammar,
-    NonTerminal,
     Production,
-    Terminal,
     Token,
     join_span,
 )
 from .lalr import ParseTable, TableBuilder
+from .symbol import NonTerminal, Terminal
 
 
-def _token_display(term: Terminal) -> str:
+def _token_display(term: type[Terminal]) -> str:
     # Prefer printable punctuation and keywords as-is, fall back to name.
-    v = term.name
+    v = term.symbol_name
     if len(v) == 1 and v in "{}[]()<>,.;=:":
         return v
     return v
@@ -63,9 +62,9 @@ class Parser:
                     raise RuntimeError(
                         "invalid reduce: stack underflow "
                         f"(state={state}, prod={arg}='{prod}', k={k}, "
-                        f"values={len(values)}, states={len(states)}, lookahead={tok.kind.name})"
+                        f"values={len(values)}, states={len(states)}, lookahead={tok.kind.symbol_name})"
                     )
-                rhs_vals = values[-k:] if k else []
+                rhs_vals = tuple(values[-k:]) if k else ()
                 if k:
                     del values[-k:]
                     del states[-k:]
@@ -73,7 +72,7 @@ class Parser:
                 values.append(out)
                 goto_action = self.table.table.get(states[-1], {}).get(prod.head)
                 if goto_action is None:
-                    raise RuntimeError(f"no goto from state {states[-1]} on {prod.head.name}")
+                    raise RuntimeError(f"no goto from state {states[-1]} on {prod.head.symbol_name}")
                 goto_kind, goto_state = goto_action
                 if goto_kind != "goto":
                     raise RuntimeError(f"expected goto action, got {goto_kind}")

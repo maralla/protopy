@@ -23,7 +23,7 @@ class Token(ast.Node, Terminal):
 
 @dataclass
 class Production:
-    head: type[NonTerminal]
+    head: NonTerminal
     body: tuple[Symbol, ...]
     action: Callable[[tuple[Symbol, ...]], NonTerminal]
 
@@ -34,7 +34,7 @@ class Production:
 
 @dataclass
 class Grammar:
-    start: type[NonTerminal]
+    start: NonTerminal
     productions: tuple[Production, ...]
 
 
@@ -194,7 +194,7 @@ class GrammarExtractor:
     def _extract_from_values_type(
         self,
         values_type: object,
-        head: type[NonTerminal],
+        head: NonTerminal,
         func: Callable[[tuple[Symbol, ...]], NonTerminal],
     ) -> list[Production]:
         """Recursively extract productions from a values type annotation."""
@@ -266,8 +266,9 @@ class GrammarExtractor:
         if not raw_return or not raw_return.is_nonterminal():
             return []
 
-        # The symbol class itself is the head
-        head = raw_return
+        # Create a grammar symbol instance for the head
+        # This is a lightweight instance used only for grammar structure identification
+        head = raw_return.grammar_symbol()
 
         # Extract body from values parameter
         values_type = hints['values']
@@ -935,5 +936,5 @@ class GrammarBuilder:
         extractor = GrammarExtractor()
         productions = extractor.extract_from_class(cls)
 
-        cls._cache = Grammar(start=ast.ProtoFile, productions=tuple(productions))
+        cls._cache = Grammar(start=ast.ProtoFile.grammar_symbol(), productions=tuple(productions))
         return cls._cache

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import cast, TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from .grammar import (
     EOF,
@@ -24,13 +24,18 @@ if TYPE_CHECKING:
 LR0Core = tuple[int, int]  # (production_index, dot_position)
 
 
+class _StartPrime(NonTerminal):
+    def __init__(self, name: str) -> None:
+        self.non_terminal_symbol_name = name
+
+
 @dataclass(frozen=True, slots=True)
 class LR1Item:
     """An LR(1) item: (production_index, dot_position, lookahead_terminal)."""
 
     production_index: int
     dot_position: int
-    lookahead: Terminal
+    lookahead: type[Terminal]
 
     def core(self) -> LR0Core:
         """Return the LR(0) core (production_index, dot_position)."""
@@ -46,7 +51,7 @@ StateCore = frozenset[LR0Core]  # Frozen set of LR(0) cores
 State = set[LR1Item]  # A single LR(1) state
 StateList = list[State]  # List of states
 StateTransitions = dict[tuple[int, Symbol], int]  # (state_index, symbol) -> next_state_index
-LookaheadMap = dict[LR0Core, set[Terminal]]  # Core -> set of lookahead terminals
+LookaheadMap = dict[LR0Core, set[type[Terminal]]]  # Core -> set of lookahead terminals
 
 
 @dataclass(slots=True)
@@ -68,13 +73,13 @@ class ParseTable:
 
     table: Mapping[int, Mapping[Symbol, tuple[str, int]]]
 
-    def terminals(self, *, state: int) -> set[Terminal]:
+    def terminals(self, *, state: int) -> set[type[Terminal]]:
         """Get the set of terminals expected in a given parser state."""
-        return {
-            symbol
-            for symbol in self.table.get(state, {})
-            if symbol.is_terminal()
-        }
+        result: set[type[Terminal]] = set()
+        for symbol in self.table.get(state, {}):
+            if symbol.is_terminal():
+                result.add(symbol.as_terminal())
+        return result
 
 
 class GrammarAnalysisError(Exception):
@@ -90,14 +95,14 @@ class TableBuilder:
 
         # Collect symbols
         self.nonterminals: set[NonTerminal] = {prod.head for prod in grammar.productions}
-        self.terminals: set[Terminal] = {
-            symbol for prod in grammar.productions
-            for symbol in prod.body
-            if symbol.is_terminal()
-        }
+        self.terminals: set[type[Terminal]] = set()
+        for prod in grammar.productions:
+            for symbol in prod.body:
+                if symbol.is_terminal():
+                    self.terminals.add(symbol.as_terminal())
 
         # FIRST sets
-        self.first_sets: dict[Symbol | Epsilon, set[Terminal | Epsilon]] = {}
+        self.first_sets: dict[Symbol | Epsilon, set[type[Terminal] | Epsilon]] = {}
         self._initialize_first_sets()
         self._compute_first_sets()
 
@@ -127,7 +132,7 @@ class TableBuilder:
                 if len(self.first_sets[production.head]) != before_size:
                     changed = True
 
-    def _first_of_sequence(self, sequence: tuple[Symbol, ...]) -> set[Terminal | Epsilon]:
+    def _first_of_sequence(self, sequence: tuple[Symbol, ...]) -> set[type[Terminal] | Epsilon]:
         """Compute FIRST set of a sequence of symbols.
 
         P -> Z β
@@ -135,7 +140,7 @@ class TableBuilder:
         => FIRST(P) = FIRST(Z) if ε ∉ FIRST(Z)
                      (FIRST(Z) - {ε}) ∪ FIRST(β) if ε ∈ FIRST(Z)
         """
-        result: set[Terminal | Epsilon] = set()
+        result: set[type[Terminal] | Epsilon] = set()
 
         if not sequence:
             result.add(EPSILON)
@@ -156,13 +161,13 @@ class TableBuilder:
     def _create_augmented_grammar(self) -> Grammar:
         """Create augmented grammar with S' -> S production."""
         # Dynamically create a new nonterminal class for S'
-        start_prime_name = self.grammar.start.name + "'"
-        start_prime = type(start_prime_name, (NonTerminal,), {'name': start_prime_name})
-        
+        start_prime_name = self.grammar.start.symbol_name + "'"
+        start_prime = _StartPrime(start_prime_name)
+
         augmented_production = Production(
             head=start_prime,
             body=(self.grammar.start,),
-            action=lambda values: values[0],
+            action=lambda values: values[0].as_nonterminal(),
         )
         productions = (augmented_production, *self.grammar.productions)
 
@@ -197,11 +202,13 @@ class TableBuilder:
             beta = production.body[item.dot_position + 1:]
             lookahead_first = self._first_of_sequence((*beta, item.lookahead))
             # Filter out EPSILON - remaining items are guaranteed to be Terminal
-            lookaheads = [x for x in lookahead_first if x is not EPSILON]
+            lookaheads: list[type[Terminal]] = [
+                cast("type[Terminal]", x) for x in lookahead_first if x is not EPSILON
+            ]
 
-            for production_index in self._productions_for_nonterminal(symbol):
+            for production_index in self._productions_for_nonterminal(symbol.as_nonterminal()):
                 for lookahead in lookaheads:
-                    new_item = LR1Item(production_index, 0, cast('Terminal', lookahead))
+                    new_item = LR1Item(production_index, 0, lookahead)
                     if new_item not in result:
                         result.add(new_item)
                         worklist.append(new_item)
@@ -316,7 +323,7 @@ class TableBuilder:
                     terminal = symbol
                     state_action = ("shift", next_state)
             # Reduce or accept action
-            elif item.production_index == 0 and item.lookahead == EOF:
+            elif item.production_index == 0 and item.lookahead is EOF:
                 terminal = EOF
                 state_action = ("accept", 0)
             else:
@@ -330,7 +337,7 @@ class TableBuilder:
             existing = actions.get(terminal)
             if existing is not None and existing != state_action:
                 raise GrammarAnalysisError(
-                    f"conflict in state {state_index} on {terminal.name}: "
+                    f"conflict in state {state_index} on {terminal.symbol_name}: "
                     f"{existing} vs {state_action}"
                 )
 
