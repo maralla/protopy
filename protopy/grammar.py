@@ -816,35 +816,40 @@ class GrammarBuilder:
         return ast.StreamOption(span=values[0].span, stream=True)
 
     @staticmethod
-    def act_rpc_body_elem_empty(values: tuple[SEMI]) -> ast.RpcBodyElem:
-        return ast.RpcBodyElem(span=values[0].span)
+    def act_rpc_body_elem_empty(values: tuple[SEMI]) -> ast.RpcOptionElem:
+        return ast.RpcOptionElem(span=values[0].span)
 
     @staticmethod
-    def act_rpc_body_elem(values: tuple[ast.OptionStmt]) -> ast.RpcBodyElem:
+    def act_rpc_body_elem(values: tuple[ast.OptionStmt]) -> ast.RpcOptionElem:
         option = values[0]
-        return ast.RpcBodyElem(span=option.span, option=option)
+        return ast.RpcOptionElem(span=option.span, option=option)
 
     @staticmethod
-    def act_rpc_body_empty(values: tuple[SEMI]) -> ast.RpcBody:
-        return ast.RpcBody(span=values[0].span)
-
-    @staticmethod
-    def act_rpc_body_eps(values: Epsilon) -> ast.RpcBody:
+    def act_rpc_options_eps(values: Epsilon) -> ast.RpcOptionCollector:
         _ = values
-        return ast.RpcBody(span=Span.empty())
+        return ast.RpcOptionCollector(span=Span.empty())
 
     @staticmethod
-    def act_rpc_body(values: tuple[ast.RpcBodyElem, ast.RpcBody]) -> ast.RpcBody:
+    def act_rpc_options(values: tuple[ast.RpcOptionElem, ast.RpcOptionCollector]) -> ast.RpcOptionCollector:
         elem = values[0]
-        body = values[1]
+        collected = values[1]
 
-        last = body if body.options else elem
-        return ast.RpcBody(span=join_span(elem, last), options=(elem, *body.options))
+        last = body if collected.options else elem
+        return ast.RpcOptionCollector(span=join_span(elem, last), options=(elem, *collected.options))
 
     @staticmethod
-    def act_rpc_body_block(values: tuple[LBRACE, ast.RpcBody, RBRACE]) -> ast.RpcBody:
+    def act_rpc_option_eps(values: Epsilon) -> ast.RpcOption:
+        _ = values
+        return ast.RpcOption(span=Span.empty())
+
+    @staticmethod
+    def act_rpc_option_empty(values: tuple[SEMI]) -> ast.RpcOption:
+        return ast.RpcOption(span=values[0].span)
+
+    @staticmethod
+    def act_rpc_option(values: tuple[LBRACE, ast.RpcOptionCollector, RBRACE]) -> ast.RpcOption:
         body = values[1]
-        return ast.RpcBody(span=join_span(values[0], values[-1]), options=tuple(body.options))
+        return ast.RpcOption(span=join_span(values[0], values[-1]), options=tuple(body.options))
 
     @staticmethod
     def act_rpc(
@@ -860,10 +865,10 @@ class GrammarBuilder:
             ast.StreamOption,
             ast.QualifiedName,
             RPAREN,
-            ast.RpcBody,
+            ast.RpcOption,
         ]
     ) -> ast.Rpc:
-        body: ast.RpcBody = values[11]
+        body: ast.RpcOption = values[11]
         last = body if body.options else values[10]
 
         return ast.Rpc(
@@ -875,10 +880,6 @@ class GrammarBuilder:
             response_stream=values[8],
             options=body
         )
-
-    @staticmethod
-    def act_service_elem_empty(values: tuple[SEMI]) -> ast.ServiceElem:
-        return ast.ServiceElem(span=values[0].span)
 
     @staticmethod
     def act_service_elem(values: tuple[ast.Rpc | ast.OptionStmt]) -> ast.ServiceElem:

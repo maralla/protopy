@@ -760,8 +760,8 @@ class StreamOption(Node, NonTerminal):
 
 
 @dataclass(frozen=True, slots=True)
-class RpcBodyElem(Node, NonTerminal):
-    """An element in an RPC body.
+class RpcOptionElem(Node, NonTerminal):
+    """An element in an RPC option.
 
     Examples:
       - option statement
@@ -778,7 +778,12 @@ class RpcBodyElem(Node, NonTerminal):
 
 
 @dataclass(frozen=True, slots=True)
-class RpcBody(Node, NonTerminal):
+class RpcOptionCollector(Node, NonTerminal):
+    options: tuple[RpcOptionElem, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RpcOption(Node, NonTerminal):
     """Body of an RPC method.
 
     Examples:
@@ -786,7 +791,7 @@ class RpcBody(Node, NonTerminal):
 
     """
 
-    options: tuple[RpcBodyElem, ...] = ()
+    options: tuple[RpcOptionElem, ...] = ()
 
     def format(self, indent: int = 0) -> list[str]:
         output = []
