@@ -1,7 +1,7 @@
 protopy
 =======
 
-A LALR(1) parser for protobuf.
+LALR(1) parser for protobuf.
 
 
 **Disclaimer**: This project is heavily assisted by code agents.
