@@ -1,7 +1,7 @@
 protopy
 =======
 
-`protopy` is a LALR(1) parser for protobuf.
+A LALR(1) parser for protobuf.
 
 
 **Disclaimer**: This project is heavily assisted by code agents.
@@ -27,4 +27,4 @@ root_ast = result.files[result.entrypoints[0]]
 License
 -------
 
-MIT(LICENSE)
+[MIT](LICENSE)
