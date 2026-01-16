@@ -1,4 +1,5 @@
 __pycache__
 .hypothesis/
+.coverage
 tests/fixtures/third_party/*
 !tests/fixtures/third_party/.gitkeep
